@@ -32,11 +32,17 @@ parser.add_argument(
     default=10,
     help="Number of epochs to train for.",
 )
+parser.add_argument(
+    "--starting_checkpoint",
+    type=str,
+    default="",
+    help="Starting checkpoint for training.",
+)
 args = parser.parse_args()
 
 
 # Extract training data for a policy network and write to file
-all_result_files = list(Path(args.search_result_dir).glob("result_*.pkl"))
+all_result_files = list(Path(args.search_result_dir).glob("*result_*.pkl"))
 smiles_list = []
 templates = []
 for pkl_file in tqdm(sorted(all_result_files[:])):
@@ -69,7 +75,7 @@ print("Training dataset size: ", len(fps),)
 # Make data loader
 dataloader = DataLoader(
     TensorDataset(torch.as_tensor(fps), torch.as_tensor(template_idx)),
-    batch_size=8,
+    batch_size=64,
     shuffle=True,
     num_workers=4,
     drop_last=True
@@ -79,9 +85,11 @@ print("Total number of parameters: ", sum(p.nelement() for p in rxn_model.model.
 # Run training
 Path(args.output_dir).mkdir(exist_ok=True, parents=True)
 rxn_model.model.net.train()
+if args.starting_checkpoint:
+    rxn_model.model.net.load_state_dict(torch.load(args.starting_checkpoint))
 optimizer = torch.optim.Adam(rxn_model.model.net.parameters(), lr=1e-3)
 loss_fn = torch.nn.CrossEntropyLoss()
-for epoch in range(50):
+for epoch in range(args.num_epochs):
     loss_list = []
     for x, y in tqdm(dataloader):
         x = x.to(device)

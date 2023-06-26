@@ -3,20 +3,57 @@
 import argparse
 from pathlib import Path
 import pickle
+import numpy as np
 
 from tqdm import tqdm
+import torch
+import torch.nn.functional as F
 
 from syntheseus.search.chem import Molecule
 from syntheseus.search.algorithms.pdvn import PDVN_MCTS, pdvn_extract_training_data
 from syntheseus.search.node_evaluation.base import NoCacheNodeEvaluator
 from syntheseus.search.node_evaluation.common import ConstantNodeEvaluator
 from retro_star_task import retro_star_inventory, backward_model as retro_star_model
+from retro_star_task.retro_star_code.mlp_inference import MLPModel, preprocess as smiles_to_fp
 
-class RetroStarScorePolicy(NoCacheNodeEvaluator):
+class PretrainedRetroStarModelPolicy(NoCacheNodeEvaluator):
     """MCTS policy which uses the "score" metadata field from the reaction model."""
 
     def _evaluate_nodes(self, nodes, graph=None) -> list[float]:
         return [n.reaction.metadata["score"] for n in nodes]
+
+
+class UpdatedRetroStarModelPolicy(NoCacheNodeEvaluator):
+    """Policy using a custom checkpoint of the retro* reaction model."""
+
+    def __init__(self, checkpoint_path: str):
+        super().__init__()
+
+        self.model = MLPModel(retro_star_model.file_names.RXN_MODEL_CHECKPOINT, retro_star_model.file_names.TEMPLATES, device=-1)
+        self.model.net.load_state_dict(torch.load(checkpoint_path))
+        self.rule_to_idx = {v: k for k, v in self.model.idx2rules.items()}
+
+    def _evaluate_nodes(self, nodes, graph=None) -> list[float]:
+
+        if len(nodes) == 0:
+            return []
+
+        # Get predictions from model
+        fps = np.array([smiles_to_fp(n.reaction.product.smiles, self.model.fp_dim) for n in nodes])
+        fps = torch.tensor(fps, dtype=torch.float32)
+        preds = F.softmax(self.model.net(fps), dim=1)
+
+        # Get scores
+        softmax_scores = [preds[i][self.rule_to_idx[n.reaction.metadata["template"]]].item() for i, n in enumerate(nodes)]
+        softmax_scores = np.clip(np.asarray(softmax_scores), 1e-3, 0.999)
+        return softmax_scores.tolist()
+
+class UpdatedRetroStarRxnModelCost(UpdatedRetroStarModelPolicy):
+    """Like model above, except it returns *costs* instead of *scores*"""
+    def _evaluate_nodes(self, nodes, graph=None) -> list[float]:
+        softmax_scores = np.asarray(super()._evaluate_nodes(nodes, graph))
+        costs = -np.log(softmax_scores)
+        return costs.tolist()
 
 def main():
 
@@ -40,10 +77,19 @@ def main():
         default=100_000,
         help="Number of iterations to run the MCTS algorithm.",
     )
+    parser.add_argument(
+        "--policy_checkpoint",
+        type=str,
+        help="Path to policy checkpoint file. If blank, then retro* model is used.",
+        required=True,
+    )
     args = parser.parse_args()
 
     # Set up algorithm, reaction model, etc
-    print("Setting everything up...")
+    if args.policy_checkpoint:
+        policy = UpdatedRetroStarModelPolicy(checkpoint_path=args.policy_checkpoint)
+    else:
+        policy = PretrainedRetroStarModelPolicy()
     pdvn = PDVN_MCTS(
         c_dead=10.0,
         value_function_syn=ConstantNodeEvaluator(0.8),
@@ -51,7 +97,7 @@ def main():
         and_node_cost_fn=ConstantNodeEvaluator(1.0),
         mol_inventory=retro_star_inventory.RetroStarInventory(),
         reaction_model=retro_star_model.RetroStarReactionModel(),
-        policy=RetroStarScorePolicy(),
+        policy=policy,
         limit_iterations=args.num_iters,
         bound_constant=1e3,  # very exploratory
         prevent_repeat_mol_in_trees=True,

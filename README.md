@@ -2,6 +2,8 @@
 
 First attempt at writing a training loop for PDVN on the retro* task.
 
+For now, it only contains code to train PDVN policies, although this could change later.
+
 ## Installation
 
 Requires:
@@ -10,7 +12,7 @@ Requires:
 - `pytorch` (to run reaction model from retro*)
 
 
-## Running
+## Running 1-shot training
 
 Code can be run with a series of 3 scripts.
 
@@ -45,3 +47,14 @@ This script runs retro*-0 using the trained policy model.
 ```bash
 python run_retro_star0_with_policy.py --checkpoint_path=./training_checkpoints/run1/checkpoint-epoch-0.pt  # change checkpoint as desired
 ```
+
+## Running iterative training
+
+To run iterative training, use the following bash script:
+
+```bash
+input_smiles_file=path/to/smiles.txt output_dir=./iterative-training-run1 bash iterative_training.sh
+```
+
+Additional variables can be prepended to this command to adjust training.
+The exact variables are listed in the script.
