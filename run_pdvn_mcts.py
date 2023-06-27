@@ -31,6 +31,7 @@ class UpdatedRetroStarModelPolicy(NoCacheNodeEvaluator):
 
         self.model = MLPModel(retro_star_model.file_names.RXN_MODEL_CHECKPOINT, retro_star_model.file_names.TEMPLATES, device=-1)
         self.model.net.load_state_dict(torch.load(checkpoint_path))
+        self.model.net.eval()  # ensure eval mode when using model for planning
         self.rule_to_idx = {v: k for k, v in self.model.idx2rules.items()}
 
     def _evaluate_nodes(self, nodes, graph=None) -> list[float]:
